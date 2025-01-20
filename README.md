@@ -1,0 +1,2 @@
+# copytradingbot
+solana copytradingbot
