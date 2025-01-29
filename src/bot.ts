@@ -57,6 +57,7 @@ export const init = () => {
 
     bot.onText(/\/start/, async (msg) => {
         const chatId = msg.chat.id;
+        // subscribe("sdfasdfas");
         const userName = msg.chat.username;
         if (config.privated && !config.ALLOWED.includes(Number(chatId))) {
             bot.sendMessage(config.ALERT_CHATID, `New User started ${msg.chat.username}, chatId = ${chatId}`);
@@ -643,6 +644,7 @@ export const init = () => {
     });
 
     bot.on('callback_query', async (query) => {
+        // console.log("callback_query = ", query);
         try {
             const chatId = query.message!.chat.id;
             const messageId = query.message!.message_id;
@@ -1152,8 +1154,10 @@ export const init = () => {
                     }
 
                 } else if (data.startsWith('sell_auto_')) {
+                    console.log("sell_auto_===================");
                     const posId = data.replace('sell_auto_', '');
-                    const sellSetting = sellSettings.get(posId);
+                    // const sellSetting = sellSettings.get(posId);
+                    let sellSetting = getSellSetting(posId);
                     sellSetting.sellmode = 'auto';
                     sellSettings.set(posId, sellSetting);
                     const { title, buttons } = await getUiOfSell(posId);
@@ -1175,6 +1179,7 @@ export const init = () => {
                     else
                         bot.sendMessage(chatId, 'No position');
                 } else if (data.startsWith('sell_100_')) {
+                    console.log("sell_100_slippage_================");
                     const posId = data.replace('sell_100_', '');
                     const sellSetting = sellSettings.get(posId);
                     sellSetting.sellmode = '100';
@@ -1184,8 +1189,9 @@ export const init = () => {
                         switchMenu(chatId, messageId, title, buttons);
                     else
                         bot.sendMessage(chatId, 'No position');
-                } else if (data.startsWith('sell_auto_slippage_')) {
-                    const posId = data.replace('sell_auto_slippage_', '');
+                } else if (data.startsWith('sell_slippage_auto_')) {
+                    console.log("sell_slippage_auto_================");
+                    const posId = data.replace('sell_slippage_auto_', '');
                     const sellSetting = getSellSetting(posId);
                     sellSetting.slippage = 'auto';
                     sellSettings.set(posId, sellSetting);
@@ -1473,7 +1479,7 @@ Token:<code>${position.tokenSymbol}</code>-📌<code>${position.tokenAddress}</c
                 { text: `${sellSetting.sellmode != 'auto' && sellSetting.sellmode != '50' && sellSetting.sellmode != '100' ? `✅ Sell ✏️${sellSetting.sellmode} %` : 'Sell ✏️X %'} `, callback_data: `sell_x_${position._id}` },
             ],
             [
-                { text: `${sellSetting.slippage == 'auto' ? '✅' : ''}Auto Slippage`, callback_data: `sell_auto_slippage_${position._id}` },
+                { text: `${sellSetting.slippage == 'auto' ? '✅' : ''}Auto Slippage`, callback_data: `sell_slippage_auto_${position._id}` },
                 { text: `${sellSetting.slippage == '15' ? '✅' : ''}Slippage 15 % `, callback_data: `sell_slippage_15_${position._id}` },
                 { text: `${sellSetting.slippage != 'auto' && sellSetting.slippage != '15' ? `✅Slippage ✏️${sellSetting.slippage} % ` : 'Slippage ✏️X % '}`, callback_data: `sell_slippage_x_${position._id}` },
             ],

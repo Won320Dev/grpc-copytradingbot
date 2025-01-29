@@ -41,6 +41,9 @@ import * as config from './config';
 import axios from 'axios';
 import { sha256 } from "js-sha256";
 import { publicKey } from '@project-serum/anchor/dist/cjs/utils';
+import { clone } from 'lodash';
+import path from 'path';
+import fs from 'fs';
 
 export const DEFAULT_COMMITMENT: Commitment = "finalized";
 export const DEFAULT_FINALITY: Finality = "finalized";
@@ -67,6 +70,14 @@ const endpoints = [
   "https://ny.mainnet.block-engine.jito.wtf/api/v1/bundles",
   "https://tokyo.mainnet.block-engine.jito.wtf/api/v1/bundles",
 ];
+
+const Cnlog = console.log;
+const logToFile = (message: string) => {
+    const logFilePath = path.join(__dirname, 'logs', 'copytrade.log');
+    const logMessage = `${message}\n`;
+    fs.appendFileSync(logFilePath, logMessage, 'utf8');
+};
+
 
 export const CONNECTION = new Connection(config.SOLANA_RPC_ENDPOINT, { wsEndpoint: config.SOLANA_WSS_ENDPOINT, commitment: "confirmed" });
 
@@ -205,6 +216,8 @@ export const jupiter_swap = async (
       await fetch(`https://quote-api.jup.ag/v6/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amount}&slippageBps=${slippage}&swapMode=${swapMode}`
       )
     ).json();
+    // Cnlog("quoteResponse=========", quoteResponse);
+    logToFile(`quoteResponse================== ${JSON.stringify(quoteResponse)}`);
 
     const { swapTransaction } = await (
       await fetch('https://quote-api.jup.ag/v6/swap', {
@@ -219,16 +232,20 @@ export const jupiter_swap = async (
         })
       })
     ).json();
+    // Cnlog("swapTransaction=========", swapTransaction);
+    logToFile(`swapTransaction================== ${JSON.stringify(swapTransaction)}`);
 
     const swapTransactionBuf = Buffer.from(swapTransaction, 'base64');
     var transaction = VersionedTransaction.deserialize(swapTransactionBuf);
     const simulateResult = await connection.simulateTransaction(transaction);
-    console.log('Jupiter SWap Trx Simulation result:', simulateResult);
+    // console.log('Jupiter SWap Trx Simulation result:', simulateResult);
+    logToFile(`simulateResult================== ${JSON.stringify(simulateResult)}`);
     transaction.sign([keypair]);
     const txSignature = bs58.encode(transaction.signatures[0]);
     const latestBlockHash = await connection.getLatestBlockhash('processed');
 
     let result = await sendBundle(transaction, keypair, latestBlockHash, jito_tip);
+    logToFile(`result================== ${JSON.stringify(result)}`);
 
     if (result) {
       console.log("http://solscan.io/tx/" + txSignature);
@@ -365,7 +382,8 @@ export async function sendBundle(
         }),
       ],
     }).compileToV0Message();
-
+    logToFile(`jitoFee_message================== ${JSON.stringify(jitoFee_message)}`);
+   
     const jitoFee_transaction = new VersionedTransaction(jitoFee_message);
     jitoFee_transaction.sign([payer]);
 
@@ -386,6 +404,9 @@ export async function sendBundle(
       params: [final_transaction],
     })
 
+    // Cnlog("sendBundle=====", data);
+    logToFile(`sendBundle================== ${JSON.stringify(data)}`);
+
     let bundleIds: any = [];
     if (data) {
       console.log(data);
@@ -394,7 +415,8 @@ export async function sendBundle(
       ];
     }
 
-    console.log("Checking bundle's status...", bundleIds);
+    // console.log("Checking bundle's status...", bundleIds);
+    logToFile(`Checking bundle's status================== ${JSON.stringify(bundleIds)}`);
     const sentTime = Date.now();
     let confirmed = false;
     while (Date.now() - sentTime < 300000) { // 5 min
@@ -418,7 +440,8 @@ export async function sendBundle(
 
         if (data) {
           const bundleStatuses = data.result.value;
-          console.log(`SentTime: ${sentTime}: Bundle Statuses:`, bundleStatuses);
+          // console.log(`SentTime: ${sentTime}: Bundle Statuses:`, bundleStatuses);
+          logToFile(`Checking bundle's status================== ${JSON.stringify(sentTime)} ${JSON.stringify(bundleStatuses)}`);
           let success = true;
 
           for (let i = 0; i < bundleIds.length; i++) {
@@ -657,11 +680,16 @@ export const getSwapInfo = async (connection: Connection, signature: string) => 
     if (!tx)
       return null;
     // const blocktime = tx?.blockTime;
+    logToFile(`tx================== ${JSON.stringify(tx)}`);
     const instructions = tx!.transaction.message.instructions;
+    logToFile(`instructions================== ${JSON.stringify(instructions)}`);
     const innerinstructions = tx!.meta!.innerInstructions;
+    logToFile(`innerinstructions================== ${JSON.stringify(innerinstructions)}`);
     const accountKeys = tx?.transaction.message.accountKeys.map((ak: any) => ak.pubkey);
+    logToFile(`accountKeys================== ${JSON.stringify(accountKeys)}`);
     const signer = accountKeys[0].toString();
     const logs = tx?.meta?.logMessages;
+    logToFile(`logs================== ${JSON.stringify(logs)}`);
 
     let isSwap;
     let dex;
@@ -767,12 +795,16 @@ export const getSwapInfo = async (connection: Connection, signature: string) => 
                   getTokenAddressAndOwnerFromTokenAccount(connection, (innerinstructions![j].instructions[0] as any).parsed.info.destination),
                   getTokenAddressAndOwnerFromTokenAccount(connection, (innerinstructions![j].instructions[1] as any).parsed.info.source)
                 ]);
+                logToFile(`sendData================== ${JSON.stringify(sendData)}`);
+                logToFile(`receiveData================== ${JSON.stringify(receiveData)}`);
 
                 const sendToken = sendData?.tokenAddress;
                 const receiveToken = receiveData?.tokenAddress;
 
                 const sendAmount = (innerinstructions![j].instructions[0] as any).parsed.info.amount;
                 const receiveAmount = (innerinstructions![j].instructions[1] as any).parsed.info.amount;
+                logToFile(`sendAmount================== ${JSON.stringify(sendAmount)}`);
+                logToFile(`receiveAmount================== ${JSON.stringify(receiveAmount)}`);
 
                 if (sendToken == 'So11111111111111111111111111111111111111112') {
                   type = "buy";
@@ -792,6 +824,7 @@ export const getSwapInfo = async (connection: Connection, signature: string) => 
         }
 
         // check inner instructions of raydium swap
+        logToFile(`innerinstructions================== ${JSON.stringify(innerinstructions)}`);
         for (let i = 0; i < innerinstructions!.length; i++) {
           const instructions = innerinstructions![i].instructions;
           for (let j = 0; j < instructions.length; j++) {
@@ -800,12 +833,16 @@ export const getSwapInfo = async (connection: Connection, signature: string) => 
                 getTokenAddressAndOwnerFromTokenAccount(connection, (instructions[j + 1] as any).parsed.info.destination),
                 getTokenAddressAndOwnerFromTokenAccount(connection, (instructions[j + 2] as any).parsed.info.source)
               ])
+              logToFile(`sendData================== ${JSON.stringify(sendData)}`);
+              logToFile(`receiveData================== ${JSON.stringify(receiveData)}`);
 
               const sendToken = sendData?.tokenAddress;
               const receiveToken = receiveData?.tokenAddress;
 
               const sendAmount = (instructions[j + 1] as any).parsed.info.amount;
               const receiveAmount = (instructions[j + 2] as any).parsed.info.amount;
+              logToFile(`sendAmount================== ${JSON.stringify(sendAmount)}`);
+              logToFile(`receiveAmount================== ${JSON.stringify(receiveAmount)}`);
               if (sendToken == 'So11111111111111111111111111111111111111112') {
                 type = "buy";
                 tokenAddress = receiveToken;

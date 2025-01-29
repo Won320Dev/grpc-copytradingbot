@@ -11,6 +11,8 @@ import { Setting } from "./models/Setting";
 import { Trade } from "./models/Trade";
 import { LAMPORTS_PER_SOL } from '@solana/web3.js';
 
+// import { API_URLS } from '@raydium-io/raydium-sdk-v4'
+
 
 
 import Client, {
@@ -39,7 +41,17 @@ import Client, {
   } from "@raydium-io/raydium-sdk";
   import { tOutPut } from "../grpc/utils/transactionOutput";
   import { decodeTransact } from "../grpc/utils/decodeTransaction";
+import { copyFileSync } from 'fs';
+import path from 'path';
+import fs from 'fs';
 //   import { forEach } from "lodash";
+
+  const Cnlog = console.log;
+  const logToFile = (message: string) => {
+    const logFilePath = path.join(__dirname, 'logs', 'copytrade.log');
+    const logMessage = `${message}\n`;
+    fs.appendFileSync(logFilePath, logMessage, 'utf8');
+};
   
   interface SubscribeRequest {
     accounts: { [key: string]: SubscribeRequestFilterAccounts };
@@ -98,11 +110,11 @@ const client = new Client(
     }
   );
   
-  const req: SubscribeRequest = {
-    // accounts: {},
+  const req: SubscribeRequest = {    
     accounts: {
       raydium: {
         account: [],
+        // filters: [],
         filters: [
           {
             memcmp: {
@@ -136,15 +148,19 @@ const client = new Client(
             }
           }
         ],
-        owner: ["675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8"]
+        owner: ["675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8"] // Raydium Liquidity Pool V4 address                
+        // owner: ["6wobj2reg57xW6ZDG6AxuHDqHSzGnVa6wEHwjbQxmT9P"] // My wallet address
+        // owner: [] // My wallet address
       }
-    },
+    },    
     slots: {},
     transactions: {
       raydiumLiquidityPoolV4: {
         vote: false,
         failed: false,
         signature: undefined,
+        // accountInclude: ["5hJ7jJxuPbwzoaSqpAj7iJita5Ufc9acFuR9VKEWVSGm"],        
+        // accountInclude: ["6wobj2reg57xW6ZDG6AxuHDqHSzGnVa6wEHwjbQxmT9P"],        
         accountInclude: [RAYDIUM_PUBLIC_KEY.toBase58()],
         accountExclude: [],
         accountRequired: []
@@ -159,10 +175,10 @@ const client = new Client(
     commitment: CommitmentLevel.PROCESSED
   };
 
-
-async function handleStream(client: Client, args: SubscribeRequest) {
+async function handleStream(client: Client, args: SubscribeRequest, id: string) {
     // Subscribe for events
     const stream = await client.subscribe();
+    let copyOrder = await CopyOrder.findById(id).populate('targetWallet').exec();
   
     // Create `error` / `end` handler
     const streamClosed = new Promise<void>((resolve, reject) => {
@@ -176,37 +192,75 @@ async function handleStream(client: Client, args: SubscribeRequest) {
       });
       stream.on("close", () => {
         resolve();
+        return;
       });
     });
   
+    // let isFirstTransaction = true; // Flag to indicate if the transaction is the first one
     // Handle updates
-    stream.on("data", (data: any) => {        
+    stream.on("data", async (data: any) => {
+      // Cnlog("data===========", data);      
+      logToFile(`data========== ${JSON.stringify(data)}`);
       if (data?.transaction) {
-        console.log("data.transaction===========", data.transaction);
+        // Cnlog("data.transaction===========", data.transaction);
+        logToFile(`data.transation================== ${JSON.stringify(data.transaction)}`);
         const txn = TXN_FORMATTER.formTransactionFromJson(
           data.transaction,
           Date.now()
         );
 
+        // Cnlog("txn signature===========", txn.transaction.signatures[0]);        
+        logToFile(`txn signature================== ${JSON.stringify(txn.transaction.signatures[0])}`);
+
         const parsedTxn = decodeRaydiumTxn(txn);
       //@ts-ignore
+      // Cnlog("parsedTxn===========", parsedTxn, parsedTxn?.instructions.length);
+      logToFile(`parsedTxn================== ${JSON.stringify(parsedTxn)}, ${JSON.stringify(parsedTxn?.instructions.length)}`);
+      
         if (parsedTxn?.instructions.length != 1) return;
+
+        // if (isFirstTransaction) {
 
         const result = analyzeTx(
             data.transaction.transaction,
             parsedTxn?.instructions
           );
 
-          console.log(
-            // new Date(),
-            // ":",
-            // `New transaction https://translator.shyft.to/tx/${txn.transaction.signatures[0]} \n`,
-            // JSON.stringify(parsedTxn, null, 2) + "\n",
-            result,
-            txn.transaction.signatures[0]
-          );
+          // if ((result.postSol ?? 0) > 100)
+        // console.log("analyzeTX result==========", result, txn.transaction.signatures[0]);        
+        logToFile(`analyzeTX result================== ${JSON.stringify(result)}, ${JSON.stringify(txn.transaction.signatures[0])}`);
+                    
+        if (!result) return;
 
-      
+          const targetSwapInfo: { isSwap: boolean; dex?: string; tokenAddress?: string; tokenAmount?: number; solAmount?: number; 
+            type?: string; signer?: string; postsol?: number; posttoken?: number; swapOwner?: string } = { isSwap: false };
+          targetSwapInfo.isSwap = true;
+          targetSwapInfo.dex = 'raydium';
+          targetSwapInfo.tokenAddress = result.token;
+          targetSwapInfo.solAmount = result.solAmount;
+          targetSwapInfo.tokenAmount = result.tokenAmount;
+          targetSwapInfo.type = result.isBuy? "buy" : "sell";
+          targetSwapInfo.postsol = result.postSol;
+          targetSwapInfo.posttoken = result.postToken;
+          targetSwapInfo.signer = (copyOrder?.targetWallet as any).publicKey;
+          targetSwapInfo.swapOwner = result.swapOwner;
+
+          // if ((targetSwapInfo.postsol ?? 0) > 100)
+            // Cnlog("targetSwapInfo===========", targetSwapInfo);       
+          logToFile(`targetSwapInfo================== ${JSON.stringify(targetSwapInfo)}`);     
+        
+        if (targetSwapInfo
+          && targetSwapInfo.isSwap
+          && targetSwapInfo.dex != "pumpfun"
+          && targetSwapInfo.signer
+          && targetSwapInfo.solAmount
+          && targetSwapInfo.tokenAddress
+          && targetSwapInfo.tokenAmount
+          && targetSwapInfo.type
+        ) {
+          // if ((targetSwapInfo.postsol ?? 0) > 100)
+            handleSwap(id, targetSwapInfo);
+        }
       }
     });
   
@@ -223,49 +277,63 @@ async function handleStream(client: Client, args: SubscribeRequest) {
       console.error(reason);
       throw reason;
     });
-  
+
     await streamClosed;
   }
 
 
 export const subscribe = async (id: string) => {
-    let copyOrder = await CopyOrder.findById(id).populate('targetWallet');
-    if (copyOrder) {        
+    let copyOrder = await CopyOrder.findById(id).populate('targetWallet').exec();
+    if (copyOrder) {
         while (true) {
             try {
-              await handleStream(client, req);
+              req.transactions.raydiumLiquidityPoolV4.accountInclude[0] = (copyOrder?.targetWallet as any).publicKey; //subscribe specific wallet
+              // req.transactions.raydiumLiquidityPoolV4.accountInclude[0] = "CkUZV387xnoGpF7wC2moMa6mPmAgCvTT4pWgzq4M9fCD"; //subscribe specific wallet
+              // req.transactions.raydiumLiquidityPoolV4.accountInclude[0] = "6wobj2reg57xW6ZDG6AxuHDqHSzGnVa6wEHwjbQxmT9P"; //subscribe specific wallet
+              // Cnlog("req==================", req.transactions.raydiumLiquidityPoolV4.accountInclude);              
+              logToFile(`req================== ${JSON.stringify(req.transactions.raydiumLiquidityPoolV4.accountInclude)}`);
+              await handleStream(client, req, id);
             } catch (error) {
               console.error("Stream error, restarting in 1 second...", error);
               await new Promise((resolve) => setTimeout(resolve, 1000));
             }
         }
     }
+    
+        // while (true) {
+        //     try {
+        //       await handleStream(client, req);
+        //     } catch (error) {
+        //       console.error("Stream error, restarting in 1 second...", error);
+        //       await new Promise((resolve) => setTimeout(resolve, 1000));
+        //     }
+        // }
+    
 }
 
 export const unsubscribe = async (id: string) => {
     const copyOrder = await CopyOrder.findById(id);
     if (copyOrder) {
-        console.log('==========> WebSocket transaction unsubscribe copyorder: ', copyOrder);
-        const subscriptionId = copyOrder.subscriptionId;
-        const request = {
-            jsonrpc: "2.0",
-            id: id,
-            method: "transactionUnsubscribe",
-            params: [subscriptionId]
-        };
-        WS.send(JSON.stringify(request));
+        // console.log('==========> WebSocket transaction unsubscribe copyorder: ', copyOrder);
+        // const subscriptionId = copyOrder.subscriptionId;
+        // const request = {
+        //     jsonrpc: "2.0",
+        //     id: id,
+        //     method: "transactionUnsubscribe",
+        //     params: [subscriptionId]
+        // };
+        // WS.send(JSON.stringify(request));
+        const stream = await client.subscribe();
+        stream.end();
     }
 }
 
 const handleSwap = async (subscriptionId: any, targetSwapInfo: any) => {
     try {
-
-        const copyOrder = await CopyOrder.findOne({ subscriptionId }).populate('myWallet').populate('targetWallet').exec();
+        const copyOrder = await CopyOrder.findById(subscriptionId).populate('myWallet').populate('targetWallet').exec();        
 
         if (copyOrder) {
-
             // console.log('copytrade.ts handleSwap copyorder: ', copyOrder);
-
             const chatId = copyOrder.chatId;
             const myWalletId = (copyOrder.myWallet as any)._id;
             const myWallet_privateKey = (copyOrder.myWallet as any).privateKey;
@@ -309,7 +377,8 @@ const handleSwap = async (subscriptionId: any, targetSwapInfo: any) => {
 
                 // wallet balance check
                 const balance = await SolanaLib.getBalance(Config.CONNECTION, myWallet_publicKey, true);
-                if (balance < amount + jitoTip + 3000000) {
+                Cnlog("balance============", balance, amount, jitoTip, amount+jitoTip*LAMPORTS_PER_SOL+3000000);
+                if (balance < amount + jitoTip*LAMPORTS_PER_SOL + 3000000) {
                     bot.sendMessage(chatId, `Can't Copy Buy due to Insufficient balance - ${myWallet_name}-<code>${myWallet_publicKey}</code>-${balance / LAMPORTS_PER_SOL} SOL`, { parse_mode: "HTML" });
                     return;
                 }
@@ -328,11 +397,13 @@ const handleSwap = async (subscriptionId: any, targetSwapInfo: any) => {
                     }
                 } else {
                     swapResult = await SolanaLib.jupiter_swap(SolanaLib.CONNECTION, myWallet_privateKey, SolanaLib.WSOL_ADDRESS, targetSwapInfo.tokenAddress, amount, "ExactIn", Math.round(jitoTip * SolanaLib.LAMPORTS));
+                    logToFile(`swapResult================== ${JSON.stringify(swapResult)}`);
                 }
 
                 if (swapResult && swapResult.success && swapResult.signature) {
 
                     const copySwapInfo = await SolanaLib.getSwapInfo(SolanaLib.CONNECTION, swapResult.signature);
+                    logToFile(`copySwapInfo================== ${JSON.stringify(copySwapInfo)}`);
 
                     const pos = await Position.findOne({
                         chatId: chatId,
@@ -413,7 +484,7 @@ const handleSwap = async (subscriptionId: any, targetSwapInfo: any) => {
                     trade.save();
 
                 } else {
-                    bot.sendMessage(chatId, `Buy failed`);
+                    // bot.sendMessage(chatId, `Buy failed`);
                 }
             } else { // if target sell
                 const [myWallet, balance] = await Promise.all([
@@ -523,12 +594,22 @@ const handleSwap = async (subscriptionId: any, targetSwapInfo: any) => {
 
 export const getSwapInfo = async (data: any) => {
     try {
-        const tx = data.params.result.transaction;
+        // console.log('data.transaction.transaction = ', data.transaction.transaction); // ==== tx
+        // const tx = data.params.result.transaction;
+        const tx = data.transaction.transaction;
         const instructions = tx.transaction.message.instructions;
+        // Cnlog("instuctions=========", instructions);
         const innerinstructions = tx.meta.innerInstructions;
-        const accountKeys = tx?.transaction.message.accountKeys.map((ak: any) => ak.pubkey);
+        // Cnlog("innerinstructions=========", innerinstructions);
+        // console.log("tx======", tx);
+        // const accountKeys = tx?.transaction.message.accountKeys.map((ak: any) => ak.pubkey);
+        const accountKeys = tx?.transaction.message.accountKeys.map((key: any) =>  decodeTransact(key));
+        // Cnlog('accountKeys ====== ', accountKeys);
+        // const signer = accountKeys[0].toString();
         const signer = accountKeys[0].toString();
+        // Cnlog('accountKeys[0] = ', signer);
         const logs = tx.meta.logMessages;
+        // Cnlog("logs==========", logs);
         let isSwap;
         let dex;
         let tokenAddress;
@@ -624,8 +705,12 @@ export const getSwapInfo = async (data: any) => {
                 isSwap = true;
                 dex = 'raydium';
                 // check instructions of raydium swap
+                Cnlog('instructions length======', instructions.length);
                 for (let i = 0; i < instructions.length; i++) {
+                    Cnlog('programId========', instructions[i].programId);
+
                     if (instructions[i].programId == "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8") {
+                        Cnlog('innerinstructions length======', innerinstructions.length);
                         for (let j = 0; j < innerinstructions!.length; j++) {
                             if (innerinstructions![j].index === i) {
 
@@ -633,12 +718,14 @@ export const getSwapInfo = async (data: any) => {
                                     SolanaLib.getTokenAddressAndOwnerFromTokenAccount(Config.CONNECTION, (innerinstructions![j].instructions[0] as any).parsed.info.destination),
                                     SolanaLib.getTokenAddressAndOwnerFromTokenAccount(Config.CONNECTION, (innerinstructions![j].instructions[1] as any).parsed.info.source)
                                 ]);
+                                Cnlog('sendData========', sendData, receiveData);
 
                                 const sendToken = sendData?.tokenAddress;
                                 const receiveToken = receiveData?.tokenAddress;
 
                                 const sendAmount = (innerinstructions![j].instructions[0] as any).parsed.info.amount;
                                 const receiveAmount = (innerinstructions![j].instructions[1] as any).parsed.info.amount;
+                                Cnlog('sendToken=========', sendToken, receiveToken, sendAmount, receiveAmount);
 
                                 if (sendToken == 'So11111111111111111111111111111111111111112') {
                                     type = "buy";
@@ -651,6 +738,7 @@ export const getSwapInfo = async (data: any) => {
                                     solAmount = Number(receiveAmount);
                                     tokenAmount = Number(sendAmount);
                                 }
+                                Cnlog('result=========', isSwap, dex, type, tokenAddress, solAmount, tokenAmount, signer );
                                 return { isSwap, dex, type, tokenAddress, solAmount, tokenAmount, signer };
                             }
                         }
@@ -770,17 +858,25 @@ export const getSwapInfo = async (data: any) => {
     }
 }
 
-function decodeRaydiumTxn(tx: any) {
+function decodeRaydiumTxn(tx: VersionedTransactionResponse) {
     if (tx.meta?.err) return;
     
     const parsedIxs = IX_PARSER.parseTransactionWithInnerInstructions(tx);
     // const parsedIxs = IX_PARSER.parseParsedTransactionWithInnerInstructions(tx);
     // const parsedIxs = IX_PARSER.parseTransactionData(tx.transaction.message, tx.meta?.loadedAddresses);
   
-    const programIxs = parsedIxs.filter(
-      (ix: any) => ix.programId.equals(RAYDIUM_PUBLIC_KEY) && ix.name == "swapBaseIn"
-    );
-  
+    parsedIxs.forEach((ix: any) => {
+      // Cnlog("ix======", ix);
+      logToFile(`ix================== ${JSON.stringify(ix)}`);
+    })    
+
+    const programIxs = parsedIxs.filter(      
+      (ix: any) =>         
+        ix.programId.equals(RAYDIUM_PUBLIC_KEY) && ix.name == "swapBaseIn"            
+    );  
+    
+    // Cnlog("programIxs.length=====", programIxs.length);    
+    logToFile(`programIxs.length================== ${JSON.stringify(programIxs.length)}`);
     if (programIxs.length === 0) return;
   
     //@ts-ignore
@@ -788,6 +884,8 @@ function decodeRaydiumTxn(tx: any) {
     // const result = { events: LogsEvent };
     // const result = { instructions: programIxs, events: LogsEvent };
     const result = { instructions: programIxs };
+    // Cnlog("result=====", result);
+    logToFile(`result================== ${JSON.stringify(result)}`);
     bnLayoutFormatter(result);
     return result;
   }
@@ -795,11 +893,14 @@ function decodeRaydiumTxn(tx: any) {
 
   function analyzeTx(trx: any, instructions: any) {
     const message = trx.transaction.message;
-    const accountKeys = message.accountKeys.map((key: any) =>
-      decodeTransact(key)
+    const accountKeys = message.accountKeys.map((key: any) =>       
+      decodeTransact(key)    
     );
   
+    logToFile(`accountKeys================== ${JSON.stringify(accountKeys)}`);
     const meta = trx.meta;
+    // Cnlog("meta==========", meta);
+    logToFile(`meta================== ${JSON.stringify(meta)}`);
   
     let isBuy = false;
     let solAmount = 0;
@@ -811,45 +912,78 @@ function decodeRaydiumTxn(tx: any) {
     let postToken = 0;
     let token = "";
     let flag = false;
+    let swapOwner = "";
     meta.innerInstructions.forEach((innerInstruction: any) => {
+      // Cnlog("message=======", message);
+      logToFile(`message================== ${JSON.stringify(message)}`);
+      // Cnlog("innersdfadsfasdfasdfsdfsdf====", accountKeys[message.instructions[innerInstruction.index].programIdIndex]); // raydium swap or other program id index check here 
+      logToFile(`innersdfadsfasdfasdfsdfsdf================== ${JSON.stringify(accountKeys[message.instructions[innerInstruction.index].programIdIndex])}`);
+      // Cnlog("messageinstructions====", message.instructions[innerInstruction.index]);
+      logToFile(`messageinstructions================== ${JSON.stringify(message.instructions[innerInstruction.index])}`);
+      
       if (
         accountKeys[
           message.instructions[innerInstruction.index].programIdIndex
-        ] == "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8"
+        // ] == "routeUGWgWzqBWFcrCfv8tritsqukccJPu3q5GPP3xS" //AMM
+        ] == "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8" ||
+        accountKeys[
+          message.instructions[innerInstruction.index].programIdIndex
+        ] == "routeUGWgWzqBWFcrCfv8tritsqukccJPu3q5GPP3xS" //AMM
+        
       ) {
+
+        // Cnlog("prebalances===postbalances===", meta.preBalances[0]/10**9, meta.postBalances[0]/10**9, meta.preTokenBalances[0].uiTokenAmount.uiAmount, meta.postTokenBalances[0].uiTokenAmount.uiAmount);
+        preSol = meta.preBalances[0]/10**9;
+        postSol = meta.postBalances[0]/10**9;
+        preToken = meta.preTokenBalances[0].uiTokenAmount.uiAmount;
+        postToken = meta.postTokenBalances[0].uiTokenAmount.uiAmount;
+        swapOwner = meta.preTokenBalances[0].owner;
+
+
         // raydium swap
         let num = 0;
+        // let num = 1;
         innerInstruction.instructions.forEach((ins: any) => {
-          if (Array.from(ins.data)[0] == 3) {
+          // Cnlog("ins=======", ins, ins.data, ins.accounts, Array.from(ins.data)[0]);
+          logToFile(`ins================== ${JSON.stringify(ins)} ${JSON.stringify(ins.data)} ${JSON.stringify(ins.accounts)}
+          ${JSON.stringify(Array.from(ins.data)[0])}`);
+          // Cnlog("ins_decode=======", LAYOUT.decode(Buffer.from(ins.data)), LAYOUT.decode(Buffer.from(ins.accounts)), 
+          // Array.from(ins.data)[0], Array.from(ins.data)[1], Array.from(ins.accounts)[0], Array.from(ins.accounts)[1]);
+          logToFile(`ins_decode================== ${JSON.stringify(LAYOUT.decode(Buffer.from(ins.data)))} ${JSON.stringify(LAYOUT.decode(Buffer.from(ins.accounts)))} 
+          ${JSON.stringify(Array.from(ins.data)[0])} ${JSON.stringify(Array.from(ins.data)[1])} ${JSON.stringify(Array.from(ins.accounts)[0])} ${JSON.stringify(Array.from(ins.accounts)[1])}`);
+
+          if (Array.from(ins.data)[0] == 3) { ////////???????????? 3 means withdraw. it's right.
             num = (num + 1) % 2;
             // transfer
-            //@ts-ignore
+            //@ts-ignore 
             const from = accountKeys[Array.from(ins.accounts)[0]];
             //@ts-ignore
             const to = accountKeys[Array.from(ins.accounts)[1]];
             const data: any = LAYOUT.decode(Buffer.from(ins.data));
   
+            // Cnlog("from======to=====", from, to, data);
+            logToFile(`from======to======================= ${JSON.stringify(from)} ${JSON.stringify(to)} ${JSON.stringify(data)}`);            
+            // Cnlog("Array.from(ins.accounts)[num]======", Array.from(ins.accounts)[num], num);
+            logToFile(`Array.from(ins.accounts)[num]=============== ${JSON.stringify(Array.from(ins.accounts)[num])} ${JSON.stringify(num)}`);
+            
             const tokenBalance = meta.preTokenBalances.filter(
               (preTokenBalance: any) =>
                 preTokenBalance.accountIndex == Array.from(ins.accounts)[num]
             );
+            // Cnlog("tokenBalance=======", tokenBalance);
+            logToFile(`tokenBalance============= ${JSON.stringify(tokenBalance)}`);
   
             if (num == 1) {
+            // if (num == 0) {
               if (
                 tokenBalance[0].mint ==
                 "So11111111111111111111111111111111111111112"
               ) {
-                isBuy = true;
-                preSol = tokenBalance[0].uiTokenAmount.uiAmount;
-                postSol = preSol + data.amount / 10 ** 9;
+                isBuy = true;                
                 solAmount = Number(data.amount);
               } else {
                 token = tokenBalance[0].mint;
-                isBuy = false;
-                preToken = tokenBalance[0].uiTokenAmount.uiAmount;
-                postToken =
-                  preToken +
-                  data.amount / 10 ** tokenBalance[0].uiTokenAmount.decimals;
+                isBuy = false;                
                 tokenAmount = Number(data.amount);
               }
             } else {
@@ -857,17 +991,11 @@ function decodeRaydiumTxn(tx: any) {
                 tokenBalance[0].mint ==
                 "So11111111111111111111111111111111111111112"
               ) {
-                isBuy = false;
-                preSol = tokenBalance[0].uiTokenAmount.uiAmount;
-                postSol = preSol - data.amount / 10 ** 9;
+                isBuy = false;                
                 solAmount = Number(data.amount);
               } else {
                 token = tokenBalance[0].mint;
-                isBuy = true;
-                preToken = tokenBalance[0].uiTokenAmount.uiAmount;
-                postToken =
-                  preToken -
-                  data.amount / 10 ** tokenBalance[0].uiTokenAmount.decimals;
+                isBuy = true;                
                 tokenAmount = Number(data.amount);
               }
             }
@@ -895,7 +1023,8 @@ function decodeRaydiumTxn(tx: any) {
       preSol,
       postSol,
       preToken,
-      postToken
+      postToken,
+      swapOwner,
     };
   }
   
